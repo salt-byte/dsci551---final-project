@@ -196,8 +196,25 @@ class Collection:
         def match(doc, query):
             for key, value in query.items():
                 cur = self._extract_key(doc, key)
-                if cur != value:
-                    return False
+                # Exact match first
+                if cur == value:
+                    continue
+                # Case-insensitive match for strings
+                if isinstance(cur, str) and isinstance(value, str):
+                    if cur.lower() == value.lower():
+                        continue
+                # Also handle boolean/string mismatches (e.g., False vs "false")
+                if isinstance(cur, bool) and isinstance(value, str):
+                    bool_str = "true" if cur else "false"
+                    if bool_str.lower() == value.lower():
+                        continue
+                if isinstance(value, bool) and isinstance(cur, str):
+                    bool_str = "true" if value else "false"
+                    if bool_str.lower() == cur.lower():
+                        continue
+                # If none of the matches worked, this document doesn't match
+                return False
+            # All query conditions matched
             return True
 
         return [doc for doc in self.data if match(doc, query)]
@@ -508,9 +525,15 @@ if 'join_results' not in st.session_state:
     st.session_state.join_results = None
 if 'use_join_results' not in st.session_state:
     st.session_state.use_join_results = False
+if 'current_file_name' not in st.session_state:
+    st.session_state.current_file_name = None
 
 # Load data
 if uploaded_file is not None:
+    # Check if this is a new file
+    new_file_name = uploaded_file.name
+    file_changed = st.session_state.current_file_name != new_file_name
+    
     with st.spinner("Loading data..."):
         try:
             # Save uploaded file temporarily
@@ -521,6 +544,14 @@ if uploaded_file is not None:
             data = load_json_file(temp_path)
             st.session_state.collection = Collection(data)
             st.session_state.data_loaded = True
+            st.session_state.current_file_name = new_file_name
+            
+            # Clear join results when new file is loaded
+            if file_changed:
+                st.session_state.join_results = None
+                st.session_state.use_join_results = False
+                st.session_state.collection_b = None
+            
             st.sidebar.success(f"Loaded {len(data)} records")
             
             # Clean up temp file
@@ -530,11 +561,22 @@ if uploaded_file is not None:
             st.session_state.data_loaded = False
 
 elif selected_file is not None:
+    # Check if this is a new file
+    file_changed = st.session_state.current_file_name != selected_file
+    
     with st.spinner("Loading data..."):
         try:
             data = load_json_file(selected_file)
             st.session_state.collection = Collection(data)
             st.session_state.data_loaded = True
+            st.session_state.current_file_name = selected_file
+            
+            # Clear join results when new file is loaded
+            if file_changed:
+                st.session_state.join_results = None
+                st.session_state.use_join_results = False
+                st.session_state.collection_b = None
+            
             st.sidebar.success(f"Loaded {len(data)} records")
         except Exception as e:
             st.sidebar.error(f"Load failed: {str(e)}")
@@ -574,11 +616,14 @@ else:
     
     collection = working_collection
     
-    # Get available fields from data
+    # Get available fields from data - always recalculate from current collection
     if collection and collection.data:
         available_fields = get_all_fields(collection.data)
     else:
         available_fields = []
+    
+    # Create a unique key suffix based on current file to force widget reset
+    file_key_suffix = st.session_state.current_file_name or "default"
     
     # Tab 1: Find
     with tab1:
@@ -596,35 +641,16 @@ else:
                 if "ip_location" in available_fields:
                     default_idx = available_fields.index("ip_location") + 1
                 
-                query_key = st.selectbox("Field", options=[""] + available_fields, index=default_idx, help="Select a field to query")
+                query_key = st.selectbox("Field", options=[""] + available_fields, index=default_idx, help="Select a field to query", key=f"find_field_{file_key_suffix}")
                 
                 if query_key:
-                    # Get sample values for this field
-                    sample_values = []
-                    seen = set()
-                    for doc in collection.data[:200]:  # Check first 200 docs
-                        val = collection._extract_key(doc, query_key)
-                        if val is not None:
-                            val_str = str(val)
-                            if val_str not in seen:
-                                seen.add(val_str)
-                                sample_values.append(val_str)
-                                if len(sample_values) >= 20:
-                                    break
-                    
-                    if sample_values:
-                        use_custom = st.checkbox("Enter custom value", key="find_custom")
-                        if use_custom:
-                            query_value = st.text_input("Value", value="", help="Enter value to match", key="find_custom_input")
-                        else:
-                            query_value = st.selectbox("Value", options=[""] + sample_values, help="Select a value from the list", key="find_value_select")
-                    else:
-                        query_value = st.text_input("Value", value="", help="Enter value to match")
+                    # Use text input for value - user can enter any value directly
+                    query_value = st.text_input("Value", value="", help="Enter value to match (case-insensitive for strings)", key=f"find_value_{file_key_suffix}")
                 else:
-                    query_value = st.text_input("Value", value="", disabled=True)
+                    query_value = st.text_input("Value", value="", disabled=True, key=f"find_value_disabled_{file_key_suffix}")
             else:
-                query_key = st.text_input("Field", value="", help="Enter field name")
-                query_value = st.text_input("Value", value="")
+                query_key = st.text_input("Field", value="", help="Enter field name", key=f"find_field_text_{file_key_suffix}")
+                query_value = st.text_input("Value", value="", key=f"find_value_text_manual_{file_key_suffix}")
         
         with col2:
             st.caption("Available Fields")
@@ -673,13 +699,14 @@ else:
                 "Fields",
                 options=available_fields,
                 default=[],
-                help="Select one or more fields to display"
+                help="Select one or more fields to display",
+                key=f"project_fields_{file_key_suffix}"
             )
             fields_input = ", ".join(selected_fields) if selected_fields else ""
             
             # Also allow manual input for custom fields
             with st.expander("Add Custom Field"):
-                custom_field = st.text_input("Custom Field", value="", help="Add a field not in the list")
+                custom_field = st.text_input("Custom Field", value="", help="Add a field not in the list", key=f"project_custom_{file_key_suffix}")
                 if custom_field:
                     if custom_field not in selected_fields:
                         selected_fields.append(custom_field)
@@ -688,7 +715,8 @@ else:
             fields_input = st.text_input(
                 "Fields",
                 value="",
-                help="Comma-separated list. Supports dot notation for nested fields."
+                help="Comma-separated list. Supports dot notation for nested fields.",
+                key=f"project_fields_text_{file_key_suffix}"
             )
         
         if st.button("Execute", type="primary", key="project_execute"):
@@ -729,21 +757,22 @@ else:
         
         with col1:
             if available_fields:
-                group_key = st.selectbox("Group By", options=[""] + available_fields, index=0, help="Select field to group by")
+                group_key = st.selectbox("Group By", options=[""] + available_fields, index=0, help="Select field to group by", key=f"agg_group_{file_key_suffix}")
             else:
-                group_key = st.text_input("Group By", value="")
+                group_key = st.text_input("Group By", value="", key=f"agg_group_text_{file_key_suffix}")
             
             agg_type = st.selectbox(
                 "Function",
-                ["count", "sum", "avg", "max", "min"]
+                ["count", "sum", "avg", "max", "min"],
+                key=f"agg_type_{file_key_suffix}"
             )
         
         with col2:
             if agg_type != "count":
                 if available_fields:
-                    agg_field = st.selectbox("Field", options=[""] + available_fields, index=0, help="Select field to aggregate")
+                    agg_field = st.selectbox("Field", options=[""] + available_fields, index=0, help="Select field to aggregate", key=f"agg_field_{file_key_suffix}")
                 else:
-                    agg_field = st.text_input("Field", value="")
+                    agg_field = st.text_input("Field", value="", key=f"agg_field_text_{file_key_suffix}")
             else:
                 agg_field = None
                 st.caption("Count does not require a field")
@@ -823,14 +852,14 @@ else:
             
             with col1:
                 if all_join_fields:
-                    key_self = st.selectbox("Left Key", options=[""] + available_fields, index=0 if "user._id" in available_fields else 0, help="Field from first dataset")
-                    key_other = st.selectbox("Right Key", options=[""] + fields_b, index=0 if "user._id" in fields_b else 0, help="Field from second dataset")
+                    key_self = st.selectbox("Left Key", options=[""] + available_fields, index=0 if "user._id" in available_fields else 0, help="Field from first dataset", key=f"join_left_{file_key_suffix}")
+                    key_other = st.selectbox("Right Key", options=[""] + fields_b, index=0 if "user._id" in fields_b else 0, help="Field from second dataset", key=f"join_right_{file_key_suffix}")
                 else:
-                    key_self = st.text_input("Left Key", value="")
-                    key_other = st.text_input("Right Key", value="")
+                    key_self = st.text_input("Left Key", value="", key=f"join_left_text_{file_key_suffix}")
+                    key_other = st.text_input("Right Key", value="", key=f"join_right_text_{file_key_suffix}")
             
             with col2:
-                join_type = st.selectbox("Type", ["inner", "left", "right", "full"])
+                join_type = st.selectbox("Type", ["inner", "left", "right", "full"], key=f"join_type_{file_key_suffix}")
             
             if st.button("Execute", type="primary", key="join_execute"):
                 try:
@@ -914,7 +943,8 @@ else:
         
         analysis_type = st.selectbox(
             "Mode",
-            ["Overview", "Field Statistics", "Engagement by Location"]
+            ["Overview", "Field Statistics", "Engagement by Location"],
+            key=f"analysis_type_{file_key_suffix}"
         )
         
         if analysis_type == "Overview":
@@ -947,9 +977,9 @@ else:
         
         elif analysis_type == "Field Statistics":
             if available_fields:
-                field_to_analyze = st.selectbox("Field", options=[""] + available_fields, index=0 if "ip_location" in available_fields else 0)
+                field_to_analyze = st.selectbox("Field", options=[""] + available_fields, index=0 if "ip_location" in available_fields else 0, key=f"analyze_field_{file_key_suffix}")
             else:
-                field_to_analyze = st.text_input("Field", value="")
+                field_to_analyze = st.text_input("Field", value="", key=f"analyze_field_text_{file_key_suffix}")
             
             if st.button("Analyze", type="primary", key="analyze_execute"):
                 try:
