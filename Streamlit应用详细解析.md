@@ -736,6 +736,93 @@ results = collection.find(query)
 - 构建查询字典
 - 调用 Collection 的 `find()` 方法
 
+**重要：智能类型匹配机制**
+
+后端的 `find()` 方法实现了**智能类型匹配**，解决了前端输入字符串类型与数据实际类型不匹配的问题：
+
+**问题背景**：
+- 前端 `text_input` 返回的值总是**字符串类型**（如 `"123"`, `"true"`）
+- 但 JSON 数据中的值可能是**数字**、**布尔值**、**None** 等不同类型
+- 严格相等比较会导致类型不匹配，找不到数据
+
+**解决方案 - 多层级匹配策略**：
+
+1. **精确匹配**（最高优先级）：
+   ```python
+   if cur == value:
+       # 类型和值都完全相等，直接匹配成功
+   ```
+   - 示例：`123 == 123` ✅
+
+2. **字符串大小写不敏感匹配**：
+   ```python
+   if isinstance(cur, str) and isinstance(value, str):
+       if cur.lower() == value.lower():
+           # "NYC" 匹配 "nyc" ✅
+   ```
+   - 示例：`"NYC"` 匹配 `"nyc"` ✅
+
+3. **数字类型自动转换**：
+   ```python
+   # 数据是数字，用户输入字符串
+   if isinstance(cur, (int, float)) and isinstance(value, str):
+       if int(value) == cur or float(value) == cur:
+           # "123" 匹配 123 ✅
+   
+   # 用户输入数字，数据是字符串
+   if isinstance(value, (int, float)) and isinstance(cur, str):
+       if int(cur) == value or float(cur) == value:
+           # 123 匹配 "123" ✅
+   ```
+   - 示例：`"123"` 可以匹配数据中的 `123` ✅
+   - 示例：`123` 可以匹配数据中的 `"123"` ✅
+
+4. **布尔值匹配**：
+   ```python
+   # 数据是布尔值，用户输入字符串
+   if isinstance(cur, bool) and isinstance(value, str):
+       bool_str = "true" if cur else "false"
+       if bool_str.lower() == value.lower():
+           # "true" 匹配 True ✅
+   
+   # 用户输入布尔值，数据是字符串
+   if isinstance(value, bool) and isinstance(cur, str):
+       bool_str = "true" if value else "false"
+       if bool_str.lower() == cur.lower():
+           # True 匹配 "true" ✅
+   ```
+   - 示例：`"true"` 可以匹配数据中的 `True` ✅
+   - 示例：`True` 可以匹配数据中的 `"true"` ✅
+
+5. **None/null 值匹配**：
+   ```python
+   # 数据是 None，用户输入字符串
+   if cur is None and isinstance(value, str):
+       if value.lower() in ["none", "null", ""]:
+           # "none" 或 "null" 匹配 None ✅
+   
+   # 用户输入 None，数据也是 None 或字符串
+   if value is None and (cur is None or cur.lower() in ["none", "null", ""]):
+       # None 匹配 None 或 "none" ✅
+   ```
+   - 示例：`"none"` 或 `"null"` 可以匹配数据中的 `None` ✅
+
+**匹配顺序**：
+- 按优先级依次尝试上述匹配策略
+- 如果所有匹配策略都失败，文档不会被匹配
+- 类型转换失败时（如字符串无法转换为数字），会跳过该策略继续尝试
+
+**实际应用示例**：
+
+| 数据中的值 | 用户输入 | 能否匹配 | 匹配策略 |
+|---------|---------|---------|---------|
+| `123` (int) | `"123"` (str) | ✅ 是 | 数字类型转换 |
+| `"NYC"` (str) | `"nyc"` (str) | ✅ 是 | 大小写不敏感 |
+| `True` (bool) | `"true"` (str) | ✅ 是 | 布尔值匹配 |
+| `None` | `"none"` (str) | ✅ 是 | None/null 匹配 |
+| `3.14` (float) | `"3.14"` (str) | ✅ 是 | 数字类型转换 |
+| `"hello"` (str) | `"Hello"` (str) | ✅ 是 | 大小写不敏感 |
+
 #### 步骤 4：显示结果数量
 
 ```python
