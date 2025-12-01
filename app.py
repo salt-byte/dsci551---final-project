@@ -9,8 +9,9 @@ from collections import defaultdict
 # JSON Tokenizer & Parser (from final_code.ipynb)
 # ============================================================================
 
+
 class Token:
-    """Represents a JSON token with type, value, and position."""
+    #Represents a JSON token with type, value, and position.
     def __init__(self, t, v, pos):
         self.type, self.value, self.pos = t, v, pos
 
@@ -73,7 +74,7 @@ class Tokenizer:
         s = self.text[j:self.i]
         return float(s) if '.' in s else int(s)
 
-    def read_kw(self, start):
+    def read_kw(self, start): #read keyword:true, false,null 
         for k, v in [("true", True), ("false", False), ("null", None)]:
             if self.text.startswith(k, self.i):
                 self.i += len(k)
@@ -84,7 +85,7 @@ class Tokenizer:
         while True:
             self.skip_ws()
             if self.i >= self.n:
-                yield Token("EOF", None, self.i)
+                yield Token("EOF", None, self.i) #end of file
                 return
             ch = self.peek()
             pos = self.i
@@ -92,12 +93,13 @@ class Tokenizer:
                 self.next()
                 yield Token(ch, ch, pos)
             elif ch == '"':
-                yield Token("STR", self.read_str(pos), pos)
+                yield Token("STR", self.read_str(pos), pos)#string
             elif ch in '-0123456789':
-                yield Token("NUM", self.read_num(pos), pos)
+                yield Token("NUM", self.read_num(pos), pos)#number
             else:
-                yield Token("KW", self.read_kw(pos), pos)
+                yield Token("KW", self.read_kw(pos), pos)#keyword
 
+#focus on the relationship between tokens
 class Stream:
     def __init__(self, tokenizer):
         self.gen, self.buf = tokenizer.tokens(), []
@@ -176,8 +178,9 @@ class Parser:
 # ============================================================================
 
 class Collection:
+
     def __init__(self, data):
-        self.data = data if isinstance(data, list) else [data]
+        self.data = data if isinstance(data, list) else [data]#ensure that data is a list or turned to be a list
     
     def _extract_key(self, doc, key):
         """supports dot notation"""
@@ -189,41 +192,30 @@ class Collection:
             cur = cur[k]
         return cur
 
-    def find(self, query=None):
-        if query is None:
+    def find(self, query=None):#query like{"attitude_count":500,"likes":2}
+        
+        if query is None:#find all data
             return self.data
 
-        def match(doc, query):
+        def match(doc, query): #to check if doc fits query
             for key, value in query.items():
-                cur = self._extract_key(doc, key)
-                # Exact match first
-                if cur == value:
-                    continue
-                # Case-insensitive match for strings
-                if isinstance(cur, str) and isinstance(value, str):
-                    if cur.lower() == value.lower():
-                        continue
-                # Also handle boolean/string mismatches (e.g., False vs "false")
-                if isinstance(cur, bool) and isinstance(value, str):
-                    bool_str = "true" if cur else "false"
-                    if bool_str.lower() == value.lower():
-                        continue
-                if isinstance(value, bool) and isinstance(cur, str):
-                    bool_str = "true" if value else "false"
-                    if bool_str.lower() == cur.lower():
-                        continue
-                # If none of the matches worked, this document doesn't match
-                return False
-            # All query conditions matched
+                cur = self._extract_key(doc, key)  
+                if cur != value:
+                    return False
             return True
 
         return [doc for doc in self.data if match(doc, query)]
 
     def project(self, fields):
+
+    #Return documents with only selected fields.
+    #Example: fields = ["user", "text"]
+
         result = []
         for doc in self.data:
             projected = {}
             for field in fields:
+                #use _extract_key to process nested key
                 projected[field] = self._extract_key(doc, field)
             result.append(projected)
         return result
@@ -231,24 +223,32 @@ class Collection:
     def groupby(self, key):
         groups = {}
         for doc in self.data:
-            group_value = self._extract_key(doc, key)
+            group_value = self._extract_key(doc, key) 
             groups.setdefault(group_value, []).append(doc)
         return groups
 
     def aggregate(self, group_key, agg_func):
+        #Apply an aggregation function (sum, count, avg, etc.) on each group.
         grouped = self.groupby(group_key)
         result = {}
         for k, docs in grouped.items():
             result[k] = agg_func(docs)
         return result
 
+
     def hash_join(self, other, key_self, key_other, join_type="inner"):
+        """
+        join_type: inner / left / right / full
+        """
+
+        # Build hash map for other
         hashmap = {}
         for doc in other.data:
             val = self._extract_key(doc, key_other)
             hashmap.setdefault(val, []).append(doc)
 
         result = []
+        # Process left side (self)
         matched_right_keys = set()
 
         for doc_left in self.data:
@@ -267,6 +267,7 @@ class Collection:
                         "right": None
                     })
 
+        # Process unmatched right side (right join or full join)
         if join_type in ("right", "full"):
             for doc_right in other.data:
                 if id(doc_right) not in matched_right_keys:
@@ -276,7 +277,6 @@ class Collection:
                     })
 
         return result
-
     def pipeline(self, query=None, project_fields=None,
                  group_key=None, agg_func=None,
                  join_collection=None, join_self_key=None, 
@@ -338,20 +338,23 @@ def agg_avg(field):
 # ============================================================================
 # Load JSON/JSONL Files (from final_code.ipynb)
 # ============================================================================
-
 def load_json_chunks(path, chunk_size=5000):
-    """Generic loader for JSONL or JSON array files."""
+    """
+    Generic loader:
+        - if JSONL:  one JSON object per line
+        - if JSON array: [ {...}, {...} ]
+    """
     with open(path, "r", encoding="utf-8") as f:
-        first_char = f.read(1)
-        f.seek(0)
+        first_char = f.read(1)#to identify whether it is a josn or a jsonl
+        f.seek(0)#go back to the begining 
 
-        if first_char == "[":
+        if first_char == "[":  # JSON array
             text = f.read()
             parser = Parser()
             arr = parser.parse(text)
             for i in range(0, len(arr), chunk_size):
                 yield arr[i:i + chunk_size]
-        else:
+        else: # JSONL
             parser = Parser()
             buffer = []
             for line in f:
@@ -365,53 +368,29 @@ def load_json_chunks(path, chunk_size=5000):
             if buffer:
                 yield buffer
 
-def load_json_file(file_path):
-    """Load entire JSON/JSONL file into memory."""
-    all_data = []
-    for chunk in load_json_chunks(file_path, chunk_size=10000):
-        all_data.extend(chunk)
-    return all_data
-
-def get_all_fields(data, prefix=""):
-    """Extract all field paths from JSON data structure."""
-    fields = set()
-    if isinstance(data, list) and data:
-        data = data[0]  # Use first item as sample
-    
-    if isinstance(data, dict):
-        for k, v in data.items():
-            full_key = f"{prefix}.{k}" if prefix else k
-            fields.add(full_key)
-            if isinstance(v, (dict, list)):
-                if isinstance(v, list) and v and isinstance(v[0], dict):
-                    fields.update(get_all_fields(v[0], full_key))
-                elif isinstance(v, dict):
-                    fields.update(get_all_fields(v, full_key))
-    return sorted(fields)
-
 # ============================================================================
 # Partial Aggregation (for chunk processing)
 # ============================================================================
 
 class PartialAgg:
-    """Handles merge of partial aggregation results."""
-    
+    """merge of partial aggregation results"""
+
     @staticmethod
     def merge_count(v1, v2):
         return v1 + v2
-    
+
     @staticmethod
     def merge_sum(v1, v2):
         return v1 + v2
-    
+
     @staticmethod
     def merge_max(v1, v2):
         return max(v1, v2)
-    
+
     @staticmethod
     def merge_min(v1, v2):
         return min(v1, v2)
-    
+
     @staticmethod
     def merge_avg(avg1, count1, avg2, count2):
         # weighted average
@@ -422,44 +401,55 @@ def calculate_average_engagement_by_location(filepath, chunk_size=5000):
     """
     Calculates the Average Engagement Rate (AER) grouped by IP location 
     for large datasets using chunked processing and partial aggregation merging.
+    This demonstrates the project's scaling requirement.
     AER = (Total Reposts + Total Comments + Total Attitudes) / Total Posts
     """
-    # Initialize global partial result containers
+    
+    # 1. initialize four global partial result containers
+    # Dictionaries to store merged partial aggregation results globally
     partial_counts = {}
     partial_reposts_sums = {}
     partial_comments_sums = {}
     partial_attitudes_sums = {}
     
-    # Process file chunk by chunk (Map Phase)
+    # 2. process the file chunk by chunk
     for chunk in load_json_chunks(filepath, chunk_size):
         coll = Collection(chunk)
     
-        # Local aggregation calculations (Grouped by "ip_location")
+        # local aggregation calculations (Grouped by "ip_location")
         chunk_counts = coll.aggregate("ip_location", agg_count())
         chunk_reposts = coll.aggregate("ip_location", agg_sum("reposts_count"))
         chunk_comments = coll.aggregate("ip_location", agg_sum("comments_count"))
         chunk_attitudes = coll.aggregate("ip_location", agg_sum("attitudes_count"))
         
-        # Merge Local Results (Reduce Phase)
+        # 3. merge Local Results
+        
+        # Merge Counts (Total Posts)
         for loc, count in chunk_counts.items():
             current_count = partial_counts.get(loc, 0)
+            # use PartialAgg.merge_count to combine current global total with local chunk total
             partial_counts[loc] = PartialAgg.merge_count(current_count, count)
             
+        # Merge Reposts Sums
         for loc, total in chunk_reposts.items():
             current_total = partial_reposts_sums.get(loc, 0)
+            # Use PartialAgg.merge_sum for addition
             partial_reposts_sums[loc] = PartialAgg.merge_sum(current_total, total)
             
+        # Merge Comments Sums
         for loc, total in chunk_comments.items():
             current_total = partial_comments_sums.get(loc, 0)
             partial_comments_sums[loc] = PartialAgg.merge_sum(current_total, total)
             
+        # Merge Attitudes (Likes) Sums
         for loc, total in chunk_attitudes.items():
             current_total = partial_attitudes_sums.get(loc, 0)
             partial_attitudes_sums[loc] = PartialAgg.merge_sum(current_total, total)
             
-    # Calculate Final Average Engagement Rate
+    # 4. Calculate Final Average Engagement Rate (Final Calculation)
     final_results = {}
     for loc in partial_counts:
+        # Get all global sums
         total_interactions = (
             partial_reposts_sums.get(loc, 0) +
             partial_comments_sums.get(loc, 0) +
@@ -467,6 +457,7 @@ def calculate_average_engagement_by_location(filepath, chunk_size=5000):
         )
         total_posts = partial_counts[loc]
         
+        # Calculate Average Engagement Rate, prevent division by zero
         avg_engagement_rate = total_interactions / total_posts if total_posts else 0
         
         final_results[loc] = {
