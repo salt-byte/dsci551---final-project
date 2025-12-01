@@ -736,6 +736,93 @@ results = collection.find(query)
 - Build query dictionary
 - Call Collection's `find()` method
 
+**Important: Intelligent Type Matching Mechanism**
+
+The backend `find()` method implements **intelligent type matching** to solve the problem of type mismatch between frontend string input and actual data types:
+
+**Problem Background**:
+- Frontend `text_input` always returns **string type** values (e.g., `"123"`, `"true"`)
+- But values in JSON data may be **numbers**, **booleans**, **None**, or other types
+- Strict equality comparison causes type mismatch, failing to find data
+
+**Solution - Multi-Level Matching Strategy**:
+
+1. **Exact Match** (Highest Priority):
+   ```python
+   if cur == value:
+       # Types and values are exactly equal, match succeeds directly
+   ```
+   - Example: `123 == 123` ✅
+
+2. **Case-Insensitive String Matching**:
+   ```python
+   if isinstance(cur, str) and isinstance(value, str):
+       if cur.lower() == value.lower():
+           # "NYC" matches "nyc" ✅
+   ```
+   - Example: `"NYC"` matches `"nyc"` ✅
+
+3. **Automatic Number Type Conversion**:
+   ```python
+   # Data is numeric, user input is string
+   if isinstance(cur, (int, float)) and isinstance(value, str):
+       if int(value) == cur or float(value) == cur:
+           # "123" matches 123 ✅
+   
+   # User input is numeric, data is string
+   if isinstance(value, (int, float)) and isinstance(cur, str):
+       if int(cur) == value or float(cur) == value:
+           # 123 matches "123" ✅
+   ```
+   - Example: `"123"` can match `123` in data ✅
+   - Example: `123` can match `"123"` in data ✅
+
+4. **Boolean Value Matching**:
+   ```python
+   # Data is boolean, user input is string
+   if isinstance(cur, bool) and isinstance(value, str):
+       bool_str = "true" if cur else "false"
+       if bool_str.lower() == value.lower():
+           # "true" matches True ✅
+   
+   # User input is boolean, data is string
+   if isinstance(value, bool) and isinstance(cur, str):
+       bool_str = "true" if value else "false"
+       if bool_str.lower() == cur.lower():
+           # True matches "true" ✅
+   ```
+   - Example: `"true"` can match `True` in data ✅
+   - Example: `True` can match `"true"` in data ✅
+
+5. **None/null Value Matching**:
+   ```python
+   # Data is None, user input is string
+   if cur is None and isinstance(value, str):
+       if value.lower() in ["none", "null", ""]:
+           # "none" or "null" matches None ✅
+   
+   # User input is None, data is also None or string
+   if value is None and (cur is None or cur.lower() in ["none", "null", ""]):
+       # None matches None or "none" ✅
+   ```
+   - Example: `"none"` or `"null"` can match `None` in data ✅
+
+**Matching Order**:
+- Try the above matching strategies in priority order
+- If all matching strategies fail, the document won't be matched
+- If type conversion fails (e.g., string can't be converted to number), skip that strategy and continue trying
+
+**Practical Application Examples**:
+
+| Value in Data | User Input | Can Match? | Matching Strategy |
+|--------------|-----------|-----------|------------------|
+| `123` (int) | `"123"` (str) | ✅ Yes | Number type conversion |
+| `"NYC"` (str) | `"nyc"` (str) | ✅ Yes | Case-insensitive |
+| `True` (bool) | `"true"` (str) | ✅ Yes | Boolean matching |
+| `None` | `"none"` (str) | ✅ Yes | None/null matching |
+| `3.14` (float) | `"3.14"` (str) | ✅ Yes | Number type conversion |
+| `"hello"` (str) | `"Hello"` (str) | ✅ Yes | Case-insensitive |
+
 #### Step 4: Display Result Count
 
 ```python

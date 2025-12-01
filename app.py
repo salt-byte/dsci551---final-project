@@ -407,6 +407,30 @@ def load_json_chunks(path, chunk_size=5000):
             if buffer:
                 yield buffer
 
+def load_json_file(file_path):
+    """Load entire JSON/JSONL file into memory."""
+    all_data = []
+    for chunk in load_json_chunks(file_path, chunk_size=10000):
+        all_data.extend(chunk)
+    return all_data
+
+def get_all_fields(data, prefix=""):
+    """Extract all field paths from JSON data structure."""
+    fields = set()
+    if isinstance(data, list) and data:
+        data = data[0]  # Use first item as sample
+    
+    if isinstance(data, dict):
+        for k, v in data.items():
+            full_key = f"{prefix}.{k}" if prefix else k
+            fields.add(full_key)
+            if isinstance(v, (dict, list)):
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    fields.update(get_all_fields(v[0], full_key))
+                elif isinstance(v, dict):
+                    fields.update(get_all_fields(v, full_key))
+    return sorted(fields)
+
 # ============================================================================
 # Partial Aggregation (for chunk processing)
 # ============================================================================

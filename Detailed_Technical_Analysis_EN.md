@@ -779,14 +779,53 @@ def find(self, query=None):
     def match(doc, query):  # Inner function: check if document matches query
         for key, value in query.items():
             cur = self._extract_key(doc, key)  # Extract field value
-            if cur != value:
-                return False  # One field mismatch returns False
-        return True  # All fields match
+            # Exact match first (highest priority)
+            if cur == value:
+                continue
+            # Case-insensitive match for strings
+            if isinstance(cur, str) and isinstance(value, str):
+                if cur.lower() == value.lower():
+                    continue
+            # Type conversion for numbers
+            if isinstance(cur, (int, float)) and isinstance(value, str):
+                try:
+                    if isinstance(cur, int) and int(value) == cur:
+                        continue
+                    if isinstance(cur, float) and float(value) == cur:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            if isinstance(value, (int, float)) and isinstance(cur, str):
+                try:
+                    if isinstance(value, int) and int(cur) == value:
+                        continue
+                    if isinstance(value, float) and float(cur) == value:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            # Boolean/string matching
+            if isinstance(cur, bool) and isinstance(value, str):
+                bool_str = "true" if cur else "false"
+                if bool_str.lower() == value.lower():
+                    continue
+            if isinstance(value, bool) and isinstance(cur, str):
+                bool_str = "true" if value else "false"
+                if bool_str.lower() == cur.lower():
+                    continue
+            # None/null matching
+            if cur is None and isinstance(value, str) and value.lower() in ["none", "null", ""]:
+                continue
+            if value is None and (cur is None or (isinstance(cur, str) and cur.lower() in ["none", "null", ""])):
+                continue
+            # If none of the matches worked, this document doesn't match
+            return False
+        # All query conditions matched
+        return True
     
     return [doc for doc in self.data if match(doc, query)]
 ```
 
-**Purpose**: Filter documents based on query conditions, similar to SQL's `WHERE` clause
+**Purpose**: Filter documents based on query conditions, similar to SQL's `WHERE` clause, with intelligent type matching support
 
 **Detailed Analysis**:
 
@@ -802,11 +841,120 @@ collection.find(None)  # Same as above
 # Matching documents: all documents with name="John" AND age=30
 ```
 
-**match() Inner Function**:
-- Iterate through each key-value pair in query condition
-- Extract corresponding field value from document
-- If values don't match, document doesn't match
-- Only return `True` when all conditions are satisfied
+#### Intelligent Type Matching Mechanism (Core Feature)
+
+**Problem Background**:
+- In practical applications, query values may be string type (e.g., from UI input boxes)
+- But values in JSON data may be **numbers**, **booleans**, **None**, or other types
+- Simple strict equality comparison causes type mismatch, failing to find data
+
+**Solution**: Implements **multi-level intelligent matching strategy**, tried in priority order:
+
+##### 1. Exact Match (Highest Priority)
+
+```python
+if cur == value:
+    # Types and values are exactly equal, match succeeds directly
+```
+
+**Example**:
+- Data: `123` (int)
+- Query: `123` (int)
+- Result: ✅ Direct match succeeds
+
+##### 2. Case-Insensitive String Matching
+
+```python
+if isinstance(cur, str) and isinstance(value, str):
+    if cur.lower() == value.lower():
+        continue
+```
+
+**Example**:
+- Data: `"NYC"` (str)
+- Query: `"nyc"` (str)
+- Result: ✅ Match succeeds (case-insensitive)
+
+##### 3. Automatic Number Type Conversion
+
+```python
+# Data is numeric, query value is string
+if isinstance(cur, (int, float)) and isinstance(value, str):
+    if int(value) == cur or float(value) == cur:
+        continue
+
+# Query value is numeric, data is string
+if isinstance(value, (int, float)) and isinstance(cur, str):
+    if int(cur) == value or float(cur) == value:
+        continue
+```
+
+**Example**:
+- Data: `123` (int)
+- Query: `"123"` (str)
+- Result: ✅ Match succeeds (automatic type conversion)
+
+- Data: `"123"` (str)
+- Query: `123` (int)
+- Result: ✅ Match succeeds (automatic type conversion)
+
+**Error Handling**:
+- If string cannot be converted to number (e.g., `"abc"`), skip this strategy
+- Use `try-except` to catch conversion exceptions
+
+##### 4. Boolean Value Matching
+
+```python
+# Data is boolean, query value is string
+if isinstance(cur, bool) and isinstance(value, str):
+    bool_str = "true" if cur else "false"
+    if bool_str.lower() == value.lower():
+        continue
+
+# Query value is boolean, data is string
+if isinstance(value, bool) and isinstance(cur, str):
+    bool_str = "true" if value else "false"
+    if bool_str.lower() == cur.lower():
+        continue
+```
+
+**Example**:
+- Data: `True` (bool)
+- Query: `"true"` (str)
+- Result: ✅ Match succeeds
+
+- Data: `"true"` (str)
+- Query: `True` (bool)
+- Result: ✅ Match succeeds
+
+##### 5. None/null Value Matching
+
+```python
+# Data is None, query value is string
+if cur is None and isinstance(value, str):
+    if value.lower() in ["none", "null", ""]:
+        continue
+
+# Query value is None, data is also None or string
+if value is None and (cur is None or cur.lower() in ["none", "null", ""]):
+    continue
+```
+
+**Example**:
+- Data: `None`
+- Query: `"none"` or `"null"` (str)
+- Result: ✅ Match succeeds
+
+- Data: `"none"` (str)
+- Query: `None`
+- Result: ✅ Match succeeds
+
+**Complete Flow of match() Inner Function**:
+1. Iterate through each key-value pair in query condition
+2. Extract corresponding field value from document (supports nested fields)
+3. Try the above 5 matching strategies in priority order
+4. If all strategies fail, document doesn't match
+5. Only return `True` when all conditions are satisfied
 
 **List Comprehension**:
 ```python
@@ -818,30 +966,36 @@ collection.find(None)  # Same as above
 **Example**:
 ```python
 data = [
-    {"name": "John", "age": 30, "city": "NYC"},
-    {"name": "Jane", "age": 25, "city": "LA"},
-    {"name": "John", "age": 30, "city": "SF"}
+    {"name": "John", "age": 30, "city": "NYC", "verified": True},
+    {"name": "Jane", "age": 25, "city": "LA", "verified": False},
+    {"name": "John", "age": 30, "city": "SF", "verified": None}
 ]
 
 coll = Collection(data)
 
-# Single condition
-coll.find({"name": "John"})
-# Result: [{"name": "John", "age": 30, "city": "NYC"},
-#          {"name": "John", "age": 30, "city": "SF"}]
+# Single condition - string matching
+coll.find({"name": "john"})  # Case-insensitive
+# Result: [{"name": "John", ...}, {"name": "John", ...}]
+
+# Number type conversion
+coll.find({"age": "30"})  # String "30" matches integer 30
+# Result: [{"name": "John", "age": 30, ...}, {"name": "John", "age": 30, ...}]
+
+# Boolean value matching
+coll.find({"verified": "true"})  # String "true" matches boolean True
+# Result: [{"name": "John", "verified": True, ...}]
+
+# None matching
+coll.find({"verified": "none"})  # String "none" matches None
+# Result: [{"name": "John", "verified": None, ...}]
 
 # Multiple conditions (AND relationship)
-coll.find({"name": "John", "age": 30})
-# Result: [{"name": "John", "age": 30, "city": "NYC"},
-#          {"name": "John", "age": 30, "city": "SF"}]
+coll.find({"name": "John", "age": "30"})  # Mixed type matching
+# Result: [{"name": "John", "age": 30, ...}, {"name": "John", "age": 30, ...}]
 
 # No match
 coll.find({"name": "Bob"})
 # Result: []
-
-# No query condition
-coll.find()
-# Result: All three documents
 ```
 
 **Supports Nested Fields**:
@@ -852,15 +1006,27 @@ data = [
 ]
 
 coll = Collection(data)
-coll.find({"user.name": "John"})  # Use dot notation
+coll.find({"user.name": "john"})  # Dot notation + case-insensitive
 # Result: [{"user": {"name": "John"}, "age": 30}]
 ```
 
+**Matching Strategy Priority Summary**:
+
+| Priority | Matching Strategy | Use Case | Example |
+|---------|------------------|----------|---------|
+| 1 | Exact match | Types and values exactly equal | `123 == 123` |
+| 2 | Case-insensitive | Both strings | `"NYC"` matches `"nyc"` |
+| 3 | Number type conversion | Number ↔ String | `"123"` matches `123` |
+| 4 | Boolean matching | Boolean ↔ String | `"true"` matches `True` |
+| 5 | None/null matching | None ↔ String | `"none"` matches `None` |
+
 **Limitations**:
-- Only supports equality matching (`==`)
-- Doesn't support range queries (`>`, `<`)
-- Doesn't support OR conditions
-- Multiple conditions are AND relationship
+- ✅ Supports equality matching (including intelligent type conversion)
+- ✅ Supports case-insensitive string matching
+- ✅ Supports type conversion for numbers, booleans, None
+- ❌ Doesn't support range queries (`>`, `<`)
+- ❌ Doesn't support OR conditions
+- ✅ Multiple conditions are AND relationship
 
 ---
 
@@ -1709,6 +1875,125 @@ for chunk in load_json_chunks("large_file.jsonl", chunk_size=5000):
     # Merge into global results
     global_results = merge(global_results, chunk_results)
 ```
+
+---
+
+### 5.3 load_json_file() - Complete File Loader
+
+```python
+def load_json_file(file_path):
+    """Load entire JSON/JSONL file into memory."""
+    all_data = []
+    for chunk in load_json_chunks(file_path, chunk_size=10000):
+        all_data.extend(chunk)
+    return all_data
+```
+
+**Purpose**: Load entire JSON/JSONL file into memory at once
+
+**Why It's Needed**:
+- **Notebook Scenario**: Only needs `load_json_chunks()` for chunked processing of large files
+- **Streamlit App Scenario**: Needs complete data in memory for real-time user queries and operations
+
+**Implementation Principle**:
+1. Call `load_json_chunks()` to read file in chunks
+2. Use `extend()` to merge all chunks into a complete list
+3. Return list containing all data
+
+**Difference from load_json_chunks()**:
+
+| Feature | `load_json_chunks()` | `load_json_file()` |
+|---------|---------------------|-------------------|
+| Return Type | Generator | List |
+| Memory Usage | Low (process chunk by chunk) | High (load all) |
+| Use Case | Large file chunked processing | Small/medium file complete loading |
+| Data Access | Sequential chunk access only | Random access to all data |
+| In Notebook | ✅ Defined | ❌ Not defined (added for Streamlit) |
+
+**Use Cases**:
+- ✅ Load files in Streamlit app for user queries
+- ✅ Need complete data in memory for real-time operations
+- ❌ Very large files (GB level, may cause memory overflow)
+
+**Example**:
+```python
+# Load complete file into memory
+data = load_json_file("data.jsonl")
+# data = [{"name": "John", ...}, {"name": "Jane", ...}, ...]
+
+# Create Collection for queries
+collection = Collection(data)
+results = collection.find({"name": "John"})  # Needs complete data
+```
+
+---
+
+### 5.4 get_all_fields() - Field Extractor
+
+```python
+def get_all_fields(data, prefix=""):
+    """Extract all field paths from JSON data structure."""
+    fields = set()
+    if isinstance(data, list) and data:
+        data = data[0]  # Use first item as sample
+    
+    if isinstance(data, dict):
+        for k, v in data.items():
+            full_key = f"{prefix}.{k}" if prefix else k
+            fields.add(full_key)
+            if isinstance(v, (dict, list)):
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    fields.update(get_all_fields(v[0], full_key))
+                elif isinstance(v, dict):
+                    fields.update(get_all_fields(v, full_key))
+    return sorted(fields)
+```
+
+**Purpose**: Recursively extract all field paths from JSON data structure (supports nested fields)
+
+**Detailed Flow**:
+
+1. **Handle Lists**: If data is a list, use first element as sample
+
+2. **Recursively Traverse Dictionary**:
+   - Extract each key as field path
+   - If value is nested dict or list, recursively extract
+
+3. **Dot Notation**: Nested fields use dot notation, e.g., `"user.name"`
+
+4. **Deduplicate and Sort**: Use `set` for deduplication, return sorted
+
+**Example**:
+```python
+data = [
+    {
+        "name": "John",
+        "user": {
+            "email": "john@example.com",
+            "address": {
+                "city": "NYC"
+            }
+        },
+        "tags": ["python", "data"]
+    }
+]
+
+fields = get_all_fields(data)
+# Result:
+# [
+#     "name",
+#     "tags",
+#     "user",
+#     "user.address",
+#     "user.address.city",
+#     "user.email"
+# ]
+```
+
+**Application in Streamlit**:
+- Automatically extract all fields from data
+- Display in UI dropdown, users don't need to remember field names
+- Supports dot notation for nested fields
 
 ---
 
