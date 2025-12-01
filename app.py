@@ -200,8 +200,47 @@ class Collection:
         def match(doc, query): #to check if doc fits query
             for key, value in query.items():
                 cur = self._extract_key(doc, key)  
-                if cur != value:
-                    return False
+                # Exact match first
+                if cur == value:
+                    continue
+                # Case-insensitive match for strings
+                if isinstance(cur, str) and isinstance(value, str):
+                    if cur.lower() == value.lower():
+                        continue
+                # Type conversion for numbers
+                if isinstance(cur, (int, float)) and isinstance(value, str):
+                    try:
+                        if isinstance(cur, int) and int(value) == cur:
+                            continue
+                        if isinstance(cur, float) and float(value) == cur:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                if isinstance(value, (int, float)) and isinstance(cur, str):
+                    try:
+                        if isinstance(value, int) and int(cur) == value:
+                            continue
+                        if isinstance(value, float) and float(cur) == value:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                # Boolean/string matching
+                if isinstance(cur, bool) and isinstance(value, str):
+                    bool_str = "true" if cur else "false"
+                    if bool_str.lower() == value.lower():
+                        continue
+                if isinstance(value, bool) and isinstance(cur, str):
+                    bool_str = "true" if value else "false"
+                    if bool_str.lower() == cur.lower():
+                        continue
+                # None/null matching
+                if cur is None and isinstance(value, str) and value.lower() in ["none", "null", ""]:
+                    continue
+                if value is None and (cur is None or (isinstance(cur, str) and cur.lower() in ["none", "null", ""])):
+                    continue
+                # If none of the matches worked, this document doesn't match
+                return False
+            # All query conditions matched
             return True
 
         return [doc for doc in self.data if match(doc, query)]
